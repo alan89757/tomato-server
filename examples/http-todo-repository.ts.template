@@ -1,0 +1,38 @@
+// 复制到客户端 src/data/httpRepository.ts。无需新增客户端依赖。
+import type { Snapshot } from '../domain/models';
+import type { TodoRepository } from './repository';
+
+export class HttpTodoRepository implements TodoRepository {
+  private etag: string | null = null;
+  private readonly baseUrl: string;
+  constructor(baseUrl: string, private readonly apiKey = '') {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+  }
+  private async request(method: 'GET' | 'PUT', snapshot?: Snapshot) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(`${this.baseUrl}/snapshot`, {
+        method,
+        headers: {
+          ...(this.apiKey ? { 'X-API-Key': this.apiKey } : {}),
+          ...(snapshot ? { 'Content-Type': 'application/json', 'If-Match': this.etag! } : {}),
+        },
+        body: snapshot ? JSON.stringify(snapshot) : undefined,
+        signal: controller.signal,
+      });
+      if (response.status === 409) throw new Error('服务器数据已更新，请重新读取并合并修改后保存。');
+      if (!response.ok) throw new Error(`服务端请求失败：HTTP ${response.status}`);
+      const data = await response.json() as Snapshot;
+      const etag = response.headers.get('ETag');
+      if (!etag) throw new Error('服务端未返回数据版本 ETag');
+      this.etag = etag;
+      return data;
+    } finally { clearTimeout(timeout); }
+  }
+  async load(): Promise<Snapshot> { return this.request('GET'); }
+  async save(snapshot: Snapshot): Promise<void> {
+    if (!this.etag) throw new Error('保存前必须先读取服务端数据，避免覆盖现有内容。');
+    await this.request('PUT', snapshot);
+  }
+}

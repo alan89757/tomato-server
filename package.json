@@ -1,0 +1,47 @@
+{
+  "name": "tomato-server",
+  "version": "1.0.0",
+  "description": "NestJS + MySQL backend for tomato-todo",
+  "author": "",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "build": "nest build",
+    "format": "prettier --write src test \"scripts/*.mjs\" package.json \"tsconfig*.json\" nest-cli.json pnpm-workspace.yaml README.md",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json",
+    "lint": "oxlint --type-aware src/",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:backup": "node scripts/backup-schema.mjs",
+    "test": "pnpm build && node --test test/domain.test.mjs",
+    "test:e2e": "pnpm build && node --test test/api.test.mjs",
+    "smoke": "node scripts/smoke-local.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/swagger": "^12.0.2",
+    "dotenv": "^17.0.0",
+    "express": "^5.2.1",
+    "mysql2": "^3.24.5",
+    "zod": "^4.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^12.0.0",
+    "@nestjs/schematics": "^12.0.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "oxlint": "^1.58.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "prettier": "^3.4.2",
+    "typescript": "^6.0.2"
+  }
+}
