@@ -23,6 +23,9 @@ export function summarize(data: Snapshot, days: number, now = new Date()) {
   const sessions = data.sessions.filter((s) => inRange(s.completedAt));
   return {
     sessions,
+    abandoned: (data.abandoned ?? []).filter((record) =>
+      inRange(record.abandonedAt),
+    ).length,
     completed: data.tasks.filter(
       (t) => t.completedAt !== null && inRange(t.completedAt),
     ).length,

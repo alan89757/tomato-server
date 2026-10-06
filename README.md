@@ -52,23 +52,23 @@ Stop-Service TomatoMySQL84
 
 基础地址：`http://localhost:3000/api`。JSON 字段采用客户端的 camelCase。成功返回实际数据；错误返回 `statusCode`、`message`、`timestamp`，校验失败另带字段路径 `errors`。
 
-| 方法   | 路径                    | 功能                                    |
-| ------ | ----------------------- | --------------------------------------- |
-| GET    | `/health`               | 检查数据库连通性                        |
-| GET    | `/snapshot`             | 获取 `{version:1,tasks,sessions,timer}` |
-| PUT    | `/snapshot`             | 事务替换整份快照，必须携带 `If-Match`   |
-| GET    | `/tasks`                | 获取所有待办，保留客户端顺序            |
-| GET    | `/tasks/:id`            | 获取单个待办                            |
-| POST   | `/tasks`                | 新增待办，ID 可由服务端生成             |
-| PATCH  | `/tasks/:id`            | 修改部分字段                            |
-| PUT    | `/tasks/:id/completion` | `{completed:true/false}` 设置完成状态   |
-| DELETE | `/tasks/:id`            | 删除待办，保留专注记录                  |
-| GET    | `/sessions`             | 获取专注历史                            |
-| POST   | `/sessions`             | 保存记录，使用客户端计时器 ID 去重      |
-| GET    | `/timer`                | 获取 `{timer:...}` 或 `{timer:null}`    |
-| PUT    | `/timer`                | 保存 `{timer:...}` 或 `{timer:null}`    |
-| DELETE | `/timer`                | 清空计时器                              |
-| GET    | `/stats?days=7`         | 近 1～366 天专注统计，默认 7 天         |
+| 方法   | 路径                    | 功能                                              |
+| ------ | ----------------------- | ------------------------------------------------- |
+| GET    | `/health`               | 检查数据库连通性                                  |
+| GET    | `/snapshot`             | 获取 `{version:1,tasks,sessions,timer,abandoned}` |
+| PUT    | `/snapshot`             | 事务替换整份快照，必须携带 `If-Match`             |
+| GET    | `/tasks`                | 获取所有待办，保留客户端顺序                      |
+| GET    | `/tasks/:id`            | 获取单个待办                                      |
+| POST   | `/tasks`                | 新增待办，ID 可由服务端生成                       |
+| PATCH  | `/tasks/:id`            | 修改部分字段                                      |
+| PUT    | `/tasks/:id/completion` | `{completed:true/false}` 设置完成状态             |
+| DELETE | `/tasks/:id`            | 删除待办，保留专注记录                            |
+| GET    | `/sessions`             | 获取专注历史                                      |
+| POST   | `/sessions`             | 保存记录，使用客户端计时器 ID 去重                |
+| GET    | `/timer`                | 获取 `{timer:...}` 或 `{timer:null}`              |
+| PUT    | `/timer`                | 保存 `{timer:...}` 或 `{timer:null}`              |
+| DELETE | `/timer`                | 清空计时器                                        |
+| GET    | `/stats?days=7`         | 近 1～366 天专注统计，默认 7 天                   |
 
 服务器保存计时器状态，计时和结束结算继续由客户端现有领域逻辑负责。休息不应生成专注记录；自由专注使用 `taskId:"free"`。支持正向计时的实际小数分钟及已删除任务的历史记录。
 
@@ -112,20 +112,9 @@ if (saved.status === 409) {
 }
 ```
 
-提供 `examples/http-todo-repository.ts.template`：复制为客户端 `src/data/httpRepository.ts`，然后在客户端 `src/data/repository.ts` 中导入并替换实例：
+客户端已接入服务端，适配器为 `C:\project\tomato-todo\src\data\httpRepository.ts`。待办、专注历史、放弃记录和计时状态通过快照接口事务保存到 MySQL。设备保留缓存与未同步草稿，首次迁移前备份原本地快照；新设备直接读取服务端数据。不同条目自动合并，同一条目冲突提供保留本机或服务端数据的选择；保存按顺序执行，网络失败后可重新同步。
 
-```ts
-import { HttpTodoRepository } from './httpRepository';
-export const repository: TodoRepository = new HttpTodoRepository(
-  'http://你的电脑局域网IP:3000/api',
-);
-```
-
-此示例遵循现有 `TodoRepository.load/save` 接口，不需要更换 UI。模板只提供 HTTP 适配器，客户端代码尚未改动。`TodoProvider` 目前只会提示保存重试；处理 409 时还需要增加重新加载、合并入口，不能仅重试旧快照。网络超时也可能发生于服务器提交之后，需重新读取确认服务器版本。
-
-首次服务器数据为空，不自动插入虚构历史或覆盖客户端现有本地数据。若要迁移已有本地数据，先用 `LocalTodoRepository.load()` 读取旧快照，再通过 HTTP `load()` 获取服务器 ETag；确认服务器内容及待迁移数据后调用 HTTP `save()`。两种存储互相独立。
-
-浏览器用 `http://localhost:3000/api`；Android 模拟器通常用 `http://10.0.2.2:3000/api`；真机用电脑局域网 IPv4，手机与电脑需在同一网络。按需允许 Windows 防火墙的 3000 端口。真机不能使用 localhost 访问电脑。原生 Android 的 HTTP 明文策略需按客户端构建配置处理；正式部署使用 HTTPS。
+MuMu 调试运行客户端 `pnpm dev:mumu`，自动转发 8081 和 3000 端口；服务地址默认 `http://127.0.0.1:3000/api`。真机通过客户端 `.env.local` 设置 `EXPO_PUBLIC_API_URL=http://电脑局域网IP:3000/api`，手机与电脑使用同一网络。
 
 浏览器来源白名单由 `CORS_ORIGINS` 配置，多个来源以逗号分隔，默认允许 Expo Web 的 localhost/127.0.0.1:8081，并暴露 ETag。
 
@@ -134,8 +123,9 @@ export const repository: TodoRepository = new HttpTodoRepository(
 ## SQL 与备份
 
 - `sql/001_initial_schema.sql`：可审阅的建表 SQL，包含表、字段、索引、约束及初始状态行。
+- `sql/002_abandoned_sessions.sql`：创建放弃记录表，保存事件 ID、时间与顺序；快照兼容旧版省略 abandoned 字段。
 - `sql/backups/schema-*.sql`：通过本机真实数据库的 `SHOW CREATE TABLE` 导出的结构备份，不含任务内容及密码。
-- `schema_migrations` 保存版本和 SHA-256 校验值。重复执行迁移不会清空数据；不要修改已执行迁移，应新增迁移文件并扩展迁移脚本。
+- `schema_migrations` 保存版本和 SHA-256 校验值。重复执行迁移不会清空数据；不要修改已执行迁移，应新增编号 SQL 迁移文件，脚本会按文件名顺序自动发现并执行。
 - MySQL DDL 会隐式提交，迁移脚本逐条执行可重复的建表语句，全部成功后才登记版本；通过数据库命名锁串行执行。
 
 ```powershell

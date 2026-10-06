@@ -84,10 +84,17 @@ export const snapshotSchema = z
     tasks: z.array(taskSchema).max(10000),
     sessions: z.array(sessionSchema).max(50000),
     timer: timerSchema.nullable(),
+    abandoned: z
+      .array(z.strictObject({ id, abandonedAt: timestamp }))
+      .max(50000)
+      .optional(),
   })
   .superRefine((v, ctx) => {
-    for (const key of ['tasks', 'sessions'] as const) {
-      if (new Set(v[key].map((item) => item.id)).size !== v[key].length) {
+    for (const key of ['tasks', 'sessions', 'abandoned'] as const) {
+      if (
+        new Set((v[key] ?? []).map((item) => item.id)).size !==
+        (v[key] ?? []).length
+      ) {
         ctx.addIssue({ code: 'custom', path: [key], message: 'ID 不可重复' });
       }
     }

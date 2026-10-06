@@ -155,6 +155,9 @@ test(
         tasks: [task],
         sessions: [session],
         timer,
+        abandoned: [
+          { id: 'abandoned-1', abandonedAt: '2026-10-04T02:00:00.000Z' },
+        ],
       };
       await t.test('健康检查、API Key 和初始空快照', async () => {
         assert.equal(
@@ -168,6 +171,7 @@ test(
           tasks: [],
           sessions: [],
           timer: null,
+          abandoned: [],
         });
         assert.equal(original.etag, '"0"');
       });

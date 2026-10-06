@@ -106,3 +106,34 @@ test('统计使用北京时间的日界线，不包含未来日期且保留小�
     { key: '2026-10-04', label: '10/4', minutes: 1.5 },
   ]);
 });
+
+test('放弃记录校验、旧快照兼容和统计', () => {
+  const empty = { version: 1, tasks: [], sessions: [], timer: null };
+  const abandoned = {
+    id: 'abandoned-1',
+    abandonedAt: '2026-10-04T02:00:00.000Z',
+  };
+  assert.ok(snapshotSchema.safeParse(empty).success);
+  const snapshot = { ...empty, abandoned: [abandoned] };
+  assert.ok(snapshotSchema.safeParse(snapshot).success);
+  assert.ok(
+    !snapshotSchema.safeParse({
+      ...snapshot,
+      abandoned: [abandoned, abandoned],
+    }).success,
+  );
+  assert.ok(
+    !snapshotSchema.safeParse({
+      ...snapshot,
+      abandoned: [{ ...abandoned, abandonedAt: 'invalid' }],
+    }).success,
+  );
+  assert.equal(
+    summarize(snapshot, 1, new Date('2026-10-04T03:00:00.000Z')).abandoned,
+    1,
+  );
+  assert.equal(
+    summarize(snapshot, 1, new Date('2026-10-05T03:00:00.000Z')).abandoned,
+    0,
+  );
+});

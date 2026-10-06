@@ -163,6 +163,15 @@ export class TodoService {
       completedAt: iso(r.completed_at),
     }));
   }
+  private async readAbandoned(connection: PoolConnection) {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      'SELECT id,abandoned_at FROM abandoned_sessions ORDER BY sort_order,id',
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      abandonedAt: iso(String(row.abandoned_at)),
+    }));
+  }
   private timerFrom(state: StateRow): Timer | null {
     return typeof state.timer === 'string'
       ? (JSON.parse(state.timer) as Timer)
@@ -177,6 +186,7 @@ export class TodoService {
       tasks: await this.readTasks(connection),
       sessions: await this.readSessions(connection),
       timer: this.timerFrom(state),
+      abandoned: await this.readAbandoned(connection),
     };
   }
   load() {
@@ -189,6 +199,7 @@ export class TodoService {
       async (connection) => {
         await connection.query('DELETE FROM tasks');
         await connection.query('DELETE FROM sessions');
+        await connection.query('DELETE FROM abandoned_sessions');
         // Batches keep statement sizes bounded and reduce round trips.
         for (let i = 0; i < snapshot.tasks.length; i += 200) {
           await connection.query(
@@ -207,6 +218,21 @@ export class TodoService {
               snapshot.sessions
                 .slice(i, i + 200)
                 .map((s, n) => sessionValues(s, i + n)),
+            ],
+          );
+        }
+        const abandoned = snapshot.abandoned ?? [];
+        for (let i = 0; i < abandoned.length; i += 200) {
+          await connection.query(
+            'INSERT INTO abandoned_sessions (id,abandoned_at,sort_order) VALUES ?',
+            [
+              abandoned
+                .slice(i, i + 200)
+                .map((record, index) => [
+                  record.id,
+                  sqlDate(record.abandonedAt),
+                  i + index,
+                ]),
             ],
           );
         }
