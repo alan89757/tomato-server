@@ -17,7 +17,7 @@ async function bootstrap() {
       .map((s) => s.trim())
       .filter(Boolean),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'If-Match', 'X-API-Key'],
+    allowedHeaders: ['Content-Type', 'If-Match', 'X-API-Key', 'Authorization'],
     exposedHeaders: ['ETag'],
   });
   const swagger = new DocumentBuilder()

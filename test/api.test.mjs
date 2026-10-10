@@ -89,12 +89,13 @@ test(
     }
     async function request(
       path,
-      { method = 'GET', body, etag, withKey = true } = {},
+      { method = 'GET', body, etag, withKey = true, token } = {},
     ) {
       const response = await fetch(url + path, {
         method,
         headers: {
           ...(withKey ? { 'X-API-Key': key } : {}),
+          ...(token ? { Authorization: 'Bearer ' + token } : {}),
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           ...(etag ? { 'If-Match': etag } : {}),
         },
@@ -114,6 +115,90 @@ test(
       assert.equal((await migrate({ ...options, database })).applied, true);
       assert.equal((await migrate({ ...options, database })).applied, false);
       await start();
+      await t.test('默认账号、密码校验、会话及退出登录', async () => {
+        assert.equal((await request('/auth/me')).status, 401);
+        assert.equal(
+          (
+            await request('/auth/login', {
+              method: 'POST',
+              body: { username: 'admin', password: 'wrong' },
+            })
+          ).status,
+          401,
+        );
+        assert.equal(
+          (
+            await request('/auth/login', {
+              method: 'POST',
+              body: { username: 'missing', password: '123456' },
+            })
+          ).status,
+          401,
+        );
+        assert.equal(
+          (
+            await request('/auth/login', {
+              method: 'POST',
+              body: { username: '', password: '' },
+            })
+          ).status,
+          400,
+        );
+        assert.equal(
+          (
+            await request('/auth/login', {
+              method: 'POST',
+              withKey: false,
+              body: { username: 'admin', password: '123456' },
+            })
+          ).status,
+          401,
+        );
+        const login = await request('/auth/login', {
+          method: 'POST',
+          body: { username: 'admin', password: '123456' },
+        });
+        assert.equal(login.status, 200);
+        assert.equal(login.body.user.username, 'admin');
+        assert.equal(login.body.user.password_hash, undefined);
+        assert.match(login.body.token, /^[a-f0-9]{64}$/);
+        assert.ok(Date.parse(login.body.expiresAt) > Date.now());
+        const token = login.body.token;
+        assert.equal(
+          (await request('/auth/me', { token })).body.username,
+          'admin',
+        );
+        assert.equal(
+          (await request('/auth/me', { token: '0'.repeat(64) })).status,
+          401,
+        );
+        const [[stored]] = await admin.query(
+          `SELECT password_hash FROM ${checkedIdentifier(database)}.users WHERE username='admin'`,
+        );
+        assert.notEqual(stored.password_hash, '123456');
+        await stop();
+        await start();
+        assert.equal(
+          (await request('/auth/me', { token })).body.username,
+          'admin',
+        );
+        assert.equal(
+          (await request('/auth/logout', { method: 'POST', token })).status,
+          200,
+        );
+        assert.equal((await request('/auth/me', { token })).status, 401);
+        const expired = await request('/auth/login', {
+          method: 'POST',
+          body: { username: 'admin', password: '123456' },
+        });
+        await admin.query(
+          `UPDATE ${checkedIdentifier(database)}.auth_sessions SET expires_at = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 SECOND)`,
+        );
+        assert.equal(
+          (await request('/auth/me', { token: expired.body.token })).status,
+          401,
+        );
+      });
       let original;
       const task = {
         id: 'client-1',

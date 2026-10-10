@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS users (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
+  password_hash VARCHAR(256) CHARACTER SET ascii NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  expires_at DATETIME(3) NOT NULL,
+  INDEX idx_auth_session_expiry (expires_at),
+  CONSTRAINT fk_auth_session_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;

@@ -151,3 +151,13 @@ pnpm smoke
 项目结构：`src/todo` 为业务接口和校验，`src/database` 为 MySQL 连接池，`src/common` 为版本响应及错误处理，`scripts` 为迁移、备份、安装和只读冒烟工具。
 
 官方参考：[NestJS 文档](https://docs.nestjs.com/first-steps)、[MySQL Windows 服务安装](https://dev.mysql.com/doc/refman/8.4/en/windows-start-service.html)。
+
+## 账号登录
+
+先执行 `pnpm db:migrate` 创建账号和会话表，再启动服务。首次启动会幂等创建默认账号 `admin`，密码 `123456`；已有账号及密码不会被覆盖。密码以随机盐 scrypt 哈希保存。
+
+- `POST /api/auth/login`：JSON `{ "username": "admin", "password": "123456" }`，返回 `user`、`token` 和 `expiresAt`。
+- `GET /api/auth/me`：携带 `Authorization: Bearer <token>` 读取账号。
+- `POST /api/auth/logout`：携带同一 Authorization 撤销当前会话。
+
+以上接口沿用现有 X-API-Key 鉴权。会话有效期七天，数据库只存 token 的 SHA-256 摘要，登录失败有一分钟内十次的账号限流。现有待办数据仍为单用户共享快照；本次账号登录不引入多用户数据隔离。
