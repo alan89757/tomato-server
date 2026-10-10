@@ -20,6 +20,7 @@ export class Versioned<T> {
   constructor(
     readonly value: T,
     readonly revision: string,
+    readonly userId?: number,
   ) {}
 }
 @Injectable()
@@ -32,6 +33,11 @@ export class RevisionInterceptor implements NestInterceptor {
             .switchToHttp()
             .getResponse<Response>()
             .setHeader('ETag', `"${result.revision}"`);
+          if (result.userId !== undefined)
+            context
+              .switchToHttp()
+              .getResponse<Response>()
+              .setHeader('X-Tomato-Data-Scope', `user:${result.userId}`);
           return result.value;
         }
         return result;
@@ -78,12 +84,10 @@ export class HttpErrorFilter implements ExceptionFilter {
         `Request failed (${request.method}): ${code ?? 'unknown error'}`,
       );
     }
-    response
-      .status(status)
-      .json({
-        ...details,
-        statusCode: status,
-        timestamp: new Date().toISOString(),
-      });
+    response.status(status).json({
+      ...details,
+      statusCode: status,
+      timestamp: new Date().toISOString(),
+    });
   }
 }

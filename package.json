@@ -18,7 +18,7 @@
     "lint": "oxlint --type-aware src/",
     "db:migrate": "node scripts/migrate.mjs",
     "db:backup": "node scripts/backup-schema.mjs",
-    "test": "pnpm build && node --test test/domain.test.mjs test/auth.test.mjs",
+    "test": "pnpm build && node --test test/domain.test.mjs test/auth.test.mjs test/accounts.test.mjs",
     "test:e2e": "pnpm build && node --test test/api.test.mjs",
     "smoke": "node scripts/smoke-local.mjs"
   },

@@ -11,6 +11,7 @@ import {
   Query,
 } from '@nestjs/common';
 import {
+  ApiBearerAuth,
   ApiBody,
   ApiHeader,
   ApiOperation,
@@ -55,6 +56,7 @@ const optionalMatch = () =>
 
 @ApiTags('待办与专注')
 @ApiSecurity('apiKey')
+@ApiBearerAuth()
 @Controller()
 export class TodoController {
   constructor(private readonly todo: TodoService) {}

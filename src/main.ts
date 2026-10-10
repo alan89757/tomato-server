@@ -18,15 +18,16 @@ async function bootstrap() {
       .filter(Boolean),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'If-Match', 'X-API-Key', 'Authorization'],
-    exposedHeaders: ['ETag'],
+    exposedHeaders: ['ETag', 'X-Tomato-Data-Scope'],
   });
   const swagger = new DocumentBuilder()
     .setTitle('Tomato Todo API')
     .setDescription(
-      '客户端 Snapshot v1 与待办、专注、计时器接口。单用户本机服务。',
+      '客户端 Snapshot v1 与待办、专注、计时器接口。所有待办与专注接口需要登录，数据按账号隔离。',
     )
     .setVersion('1.0.0')
     .addApiKey({ type: 'apiKey', in: 'header', name: 'X-API-Key' }, 'apiKey')
+    .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, swagger);
   document.openapi = '3.1.0';

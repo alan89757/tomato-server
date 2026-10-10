@@ -87,9 +87,16 @@ test(
       }
       throw new Error(`测试服务启动超时：${output}`);
     }
+    let defaultToken;
     async function request(
       path,
-      { method = 'GET', body, etag, withKey = true, token } = {},
+      {
+        method = 'GET',
+        body,
+        etag,
+        withKey = true,
+        token = path.startsWith('/auth/') ? undefined : defaultToken,
+      } = {},
     ) {
       const response = await fetch(url + path, {
         method,
@@ -199,6 +206,11 @@ test(
           401,
         );
       });
+      const ownerLogin = await request('/auth/login', {
+        method: 'POST',
+        body: { username: 'admin', password: '123456' },
+      });
+      defaultToken = ownerLogin.body.token;
       let original;
       const task = {
         id: 'client-1',
@@ -277,6 +289,127 @@ test(
           assert.deepEqual((await request('/snapshot')).body, snapshot);
         },
       );
+      await t.test(
+        '账号隔离：新账号空数据、相同 ID、CRUD、统计与退出后的访问',
+        async () => {
+          const { hashPassword } = await import('../dist/auth/auth.service.js');
+          const [created] = await admin.execute(
+            `INSERT INTO ${checkedIdentifier(database)}.users (username,password_hash) VALUES (?,?)`,
+            ['second', await hashPassword('test-password')],
+          );
+          const login = await request('/auth/login', {
+            method: 'POST',
+            body: { username: 'second', password: 'test-password' },
+          });
+          const token = login.body.token;
+          assert.equal(login.status, 200);
+          const owner = await request('/snapshot');
+          const blank = await request('/snapshot', { token });
+          assert.deepEqual(blank.body, {
+            version: 1,
+            tasks: [],
+            sessions: [],
+            abandoned: [],
+            timer: null,
+          });
+          assert.equal(blank.etag, '"0"');
+          assert.equal((await request('/tasks', { token })).body.length, 0);
+          assert.equal((await request('/sessions', { token })).body.length, 0);
+          assert.deepEqual((await request('/timer', { token })).body, {
+            timer: null,
+          });
+          assert.equal(
+            (await request('/tasks/client-1', { token })).status,
+            404,
+          );
+          assert.equal(
+            (
+              await request('/tasks/client-1', {
+                token,
+                method: 'PATCH',
+                body: { title: 'stolen' },
+              })
+            ).status,
+            404,
+          );
+          assert.equal(
+            (await request('/tasks/client-1', { token, method: 'DELETE' }))
+              .status,
+            404,
+          );
+          const own = {
+            ...snapshot,
+            tasks: [{ ...task, title: 'second user' }],
+          };
+          assert.equal(
+            (
+              await request('/snapshot', {
+                token,
+                method: 'PUT',
+                body: own,
+                etag: blank.etag,
+              })
+            ).status,
+            200,
+          );
+          assert.deepEqual((await request('/snapshot', { token })).body, own);
+          assert.equal(
+            (
+              await request('/tasks/client-1', {
+                token,
+                method: 'PATCH',
+                body: { note: 'second note' },
+              })
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await request('/tasks/client-1/completion', {
+                token,
+                method: 'PUT',
+                body: { completed: true },
+              })
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await request('/sessions', {
+                token,
+                method: 'POST',
+                body: session,
+              })
+            ).status,
+            201,
+          );
+          const stats = await request('/stats?days=366', { token });
+          assert.equal(stats.status, 200);
+          assert.deepEqual((await request('/snapshot')).body, owner.body);
+          assert.equal(
+            (await request('/snapshot')).etag,
+            owner.etag,
+            'another user cannot change the owner revision',
+          );
+          for (const path of [
+            '/snapshot',
+            '/tasks',
+            '/tasks/client-1',
+            '/sessions',
+            '/timer',
+            '/stats',
+          ]) {
+            assert.equal((await request(path, { token: null })).status, 401);
+            assert.equal(
+              (await request(path, { token: '0'.repeat(64) })).status,
+              401,
+            );
+          }
+          await request('/auth/logout', { token, method: 'POST' });
+          assert.equal((await request('/snapshot', { token })).status, 401);
+          assert.ok(created.insertId > 0);
+        },
+      );
       await t.test('校验失败与旧版本冲突均不修改原有数据', async () => {
         const before = await request('/snapshot');
         assert.equal(
@@ -317,7 +450,7 @@ test(
         '数据库写入中途失败会回滚删除和插入，不泄露 SQL 内容',
         async () => {
           const before = await request('/snapshot');
-          const table = checkedIdentifier(database) + '.tasks';
+          const table = checkedIdentifier(database) + '.user_tasks';
           await admin.query(
             `ALTER TABLE ${table} ADD CONSTRAINT chk_test_rollback CHECK (title <> 'force-rollback')`,
           );

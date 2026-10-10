@@ -2,8 +2,13 @@ import {
   ConflictException,
   HttpException,
   Injectable,
+  Inject,
+  UnauthorizedException,
   NotFoundException,
 } from '@nestjs/common';
+import { REQUEST } from '@nestjs/core';
+import type { Request } from 'express';
+import { AuthService } from '../auth/auth.service.js';
 import { randomUUID } from 'node:crypto';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { DatabaseService } from '../database/database.service.js';
@@ -51,9 +56,9 @@ const sqlDate = (value: string | null) =>
     ? null
     : new Date(value).toISOString().slice(0, 23).replace('T', ' ');
 const taskColumns =
-  'id,title,note,category,estimated_pomodoros,duration_minutes,due_date,created_at,completed_at,theme,kind,timing_mode,sort_order';
+  'user_id,id,title,note,category,estimated_pomodoros,duration_minutes,due_date,created_at,completed_at,theme,kind,timing_mode,sort_order';
 const sessionColumns =
-  'id,task_id,task_title,category,duration_minutes,completed_at,sort_order';
+  'user_id,id,task_id,task_title,category,duration_minutes,completed_at,sort_order';
 const taskValues = (t: Task, order: number) => [
   t.id,
   t.title,
@@ -81,7 +86,12 @@ const sessionValues = (s: Session, order: number) => [
 
 @Injectable()
 export class TodoService {
-  constructor(private readonly db: DatabaseService) {}
+  private userId = 0;
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly auth: AuthService,
+    @Inject(REQUEST) private readonly request: Request,
+  ) {}
 
   private async transact<T>(
     operation: (connection: PoolConnection, state: StateRow) => Promise<T>,
@@ -89,6 +99,10 @@ export class TodoService {
     expected?: string,
     required = false,
   ): Promise<Versioned<T>> {
+    const user = await this.auth.me(this.request.header('authorization'));
+    if (!Number.isSafeInteger(user.id) || user.id <= 0)
+      throw new UnauthorizedException('请先登录');
+    this.userId = user.id;
     if (required && expected === undefined)
       throw new HttpException(
         '保存快照需要 If-Match，请先 GET /api/snapshot 获取 ETag',
@@ -102,8 +116,13 @@ export class TodoService {
     const connection = await this.db.pool.getConnection();
     try {
       await connection.beginTransaction();
+      await connection.execute(
+        'INSERT IGNORE INTO user_app_state (user_id, revision, timer) VALUES (?,0,NULL)',
+        [this.userId],
+      );
       const [rows] = await connection.query<StateRow[]>(
-        'SELECT revision,timer FROM app_state WHERE id=1 FOR UPDATE',
+        'SELECT revision,timer FROM user_app_state WHERE user_id=? FOR UPDATE',
+        [this.userId],
       );
       const state = rows[0];
       if (!state) throw new Error('Missing app_state');
@@ -116,11 +135,12 @@ export class TodoService {
       const value = await operation(connection, state);
       const nextRevision = write ? String(BigInt(revision) + 1n) : revision;
       if (write)
-        await connection.execute('UPDATE app_state SET revision=? WHERE id=1', [
-          nextRevision,
-        ]);
+        await connection.execute(
+          'UPDATE user_app_state SET revision=? WHERE user_id=?',
+          [nextRevision, this.userId],
+        );
       await connection.commit();
-      return new Versioned(value, nextRevision);
+      return new Versioned(value, nextRevision, this.userId);
     } catch (error) {
       await connection.rollback();
       if ((error as { code?: string }).code === 'ER_DUP_ENTRY')
@@ -133,7 +153,8 @@ export class TodoService {
 
   private async readTasks(connection: PoolConnection): Promise<Task[]> {
     const [rows] = await connection.query<TaskRow[]>(
-      'SELECT * FROM tasks ORDER BY sort_order,id',
+      'SELECT * FROM user_tasks WHERE user_id=? ORDER BY sort_order,id',
+      [this.userId],
     );
     return rows.map((r) => ({
       id: r.id,
@@ -152,7 +173,8 @@ export class TodoService {
   }
   private async readSessions(connection: PoolConnection): Promise<Session[]> {
     const [rows] = await connection.query<SessionRow[]>(
-      'SELECT * FROM sessions ORDER BY sort_order,id',
+      'SELECT * FROM user_sessions WHERE user_id=? ORDER BY sort_order,id',
+      [this.userId],
     );
     return rows.map((r) => ({
       id: r.id,
@@ -165,7 +187,8 @@ export class TodoService {
   }
   private async readAbandoned(connection: PoolConnection) {
     const [rows] = await connection.query<RowDataPacket[]>(
-      'SELECT id,abandoned_at FROM abandoned_sessions ORDER BY sort_order,id',
+      'SELECT id,abandoned_at FROM user_abandoned_sessions WHERE user_id=? ORDER BY sort_order,id',
+      [this.userId],
     );
     return rows.map((row) => ({
       id: String(row.id),
@@ -197,38 +220,46 @@ export class TodoService {
   save(snapshot: Snapshot, expected?: string) {
     return this.transact(
       async (connection) => {
-        await connection.query('DELETE FROM tasks');
-        await connection.query('DELETE FROM sessions');
-        await connection.query('DELETE FROM abandoned_sessions');
+        await connection.query('DELETE FROM user_tasks WHERE user_id=?', [
+          this.userId,
+        ]);
+        await connection.query('DELETE FROM user_sessions WHERE user_id=?', [
+          this.userId,
+        ]);
+        await connection.query(
+          'DELETE FROM user_abandoned_sessions WHERE user_id=?',
+          [this.userId],
+        );
         // Batches keep statement sizes bounded and reduce round trips.
         for (let i = 0; i < snapshot.tasks.length; i += 200) {
           await connection.query(
-            `INSERT INTO tasks (${taskColumns}) VALUES ?`,
+            `INSERT INTO user_tasks (${taskColumns}) VALUES ?`,
             [
               snapshot.tasks
                 .slice(i, i + 200)
-                .map((t, n) => taskValues(t, i + n)),
+                .map((t, n) => [this.userId, ...taskValues(t, i + n)]),
             ],
           );
         }
         for (let i = 0; i < snapshot.sessions.length; i += 200) {
           await connection.query(
-            `INSERT INTO sessions (${sessionColumns}) VALUES ?`,
+            `INSERT INTO user_sessions (${sessionColumns}) VALUES ?`,
             [
               snapshot.sessions
                 .slice(i, i + 200)
-                .map((s, n) => sessionValues(s, i + n)),
+                .map((s, n) => [this.userId, ...sessionValues(s, i + n)]),
             ],
           );
         }
         const abandoned = snapshot.abandoned ?? [];
         for (let i = 0; i < abandoned.length; i += 200) {
           await connection.query(
-            'INSERT INTO abandoned_sessions (id,abandoned_at,sort_order) VALUES ?',
+            'INSERT INTO user_abandoned_sessions (user_id,id,abandoned_at,sort_order) VALUES ?',
             [
               abandoned
                 .slice(i, i + 200)
                 .map((record, index) => [
+                  this.userId,
                   record.id,
                   sqlDate(record.abandonedAt),
                   i + index,
@@ -236,9 +267,13 @@ export class TodoService {
             ],
           );
         }
-        await connection.execute('UPDATE app_state SET timer=? WHERE id=1', [
-          snapshot.timer === null ? null : JSON.stringify(snapshot.timer),
-        ]);
+        await connection.execute(
+          'UPDATE user_app_state SET timer=? WHERE user_id=?',
+          [
+            snapshot.timer === null ? null : JSON.stringify(snapshot.timer),
+            this.userId,
+          ],
+        );
         return snapshot;
       },
       true,
@@ -266,11 +301,13 @@ export class TodoService {
           completedAt: null,
         };
         const [rows] = await connection.query<RowDataPacket[]>(
-          'SELECT COALESCE(MIN(sort_order),0)-1 AS position FROM tasks',
+          'SELECT COALESCE(MIN(sort_order),0)-1 AS position FROM user_tasks WHERE user_id=?',
+          [this.userId],
         );
-        await connection.query(`INSERT INTO tasks (${taskColumns}) VALUES ?`, [
-          [taskValues(task, Number(rows[0].position))],
-        ]);
+        await connection.query(
+          `INSERT INTO user_tasks (${taskColumns}) VALUES ?`,
+          [[[this.userId, ...taskValues(task, Number(rows[0].position))]]],
+        );
         return task;
       },
       true,
@@ -286,8 +323,8 @@ export class TodoService {
     if (!task) throw new NotFoundException('待办不存在');
     const next: Task = { ...task, ...patch };
     await connection.execute(
-      'UPDATE tasks SET title=?,note=?,category=?,estimated_pomodoros=?,duration_minutes=?,due_date=?,created_at=?,completed_at=?,theme=?,kind=?,timing_mode=? WHERE id=?',
-      [...taskValues(next, 0).slice(1, -1), id],
+      'UPDATE user_tasks SET title=?,note=?,category=?,estimated_pomodoros=?,duration_minutes=?,due_date=?,created_at=?,completed_at=?,theme=?,kind=?,timing_mode=? WHERE user_id=? AND id=?',
+      [...taskValues(next, 0).slice(1, -1), this.userId, id],
     );
     return next;
   }
@@ -321,7 +358,10 @@ export class TodoService {
         const tasks = await this.readTasks(connection);
         if (!tasks.some((t) => t.id === id))
           throw new NotFoundException('待办不存在');
-        await connection.execute('DELETE FROM tasks WHERE id=?', [id]);
+        await connection.execute(
+          'DELETE FROM user_tasks WHERE user_id=? AND id=?',
+          [this.userId, id],
+        );
         return { deleted: true };
       },
       true,
@@ -352,11 +392,19 @@ export class TodoService {
           return previous;
         }
         const [rows] = await connection.query<RowDataPacket[]>(
-          'SELECT COALESCE(MAX(sort_order),-1)+1 AS position FROM sessions',
+          'SELECT COALESCE(MAX(sort_order),-1)+1 AS position FROM user_sessions WHERE user_id=?',
+          [this.userId],
         );
         await connection.query(
-          `INSERT INTO sessions (${sessionColumns}) VALUES ?`,
-          [[sessionValues(session, Number(rows[0].position))]],
+          `INSERT INTO user_sessions (${sessionColumns}) VALUES ?`,
+          [
+            [
+              [
+                this.userId,
+                ...sessionValues(session, Number(rows[0].position)),
+              ],
+            ],
+          ],
         );
         return session;
       },
@@ -372,9 +420,10 @@ export class TodoService {
   setTimer(timer: Timer | null, expected?: string) {
     return this.transact(
       async (connection) => {
-        await connection.execute('UPDATE app_state SET timer=? WHERE id=1', [
-          timer === null ? null : JSON.stringify(timer),
-        ]);
+        await connection.execute(
+          'UPDATE user_app_state SET timer=? WHERE user_id=?',
+          [timer === null ? null : JSON.stringify(timer), this.userId],
+        );
         return { timer };
       },
       true,

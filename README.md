@@ -2,7 +2,9 @@
 
 `C:\project\tomato-todo` 的 NestJS + MySQL 服务端。字段与客户端 `src/domain/models.ts` 一致，提供 Snapshot v1、待办、专注历史、计时器和统计接口。
 
-当前按客户端已有单用户模型实现：所有请求访问同一份数据，未引入注册、登录或多用户隔离。可通过 `API_KEY` 限制访问；部署多用户版本时应先增加用户归属与认证。
+待办、快照、专注、计时器和统计接口均要求 `Authorization: Bearer <token>`，并按登录用户隔离数据与 ETag 版本；`API_KEY` 仍用于接口访问控制。新账号数据为空，相同记录 ID 可由不同账号各自使用。
+
+升级已有部署时先执行 `pnpm db:migrate`，再构建并重启服务。迁移 `004_user_todo_data.sql` 新建带用户归属的 `user_*` 表，保留旧共享表，不把所有权未知的旧数据自动分给任意账号。成功响应包含 `X-Tomato-Data-Scope: user:<用户ID>`，客户端通过此头校验服务已启用隔离。
 
 ## 本机环境
 
@@ -50,7 +52,7 @@ Stop-Service TomatoMySQL84
 
 ## 接口
 
-基础地址：`http://localhost:3000/api`。JSON 字段采用客户端的 camelCase。成功返回实际数据；错误返回 `statusCode`、`message`、`timestamp`，校验失败另带字段路径 `errors`。
+基础地址：`http://localhost:3000/api`。先通过 `POST /auth/login` 获取会话；所有待办与专注路由均须携带 Bearer token，未登录或会话失效返回 401。JSON 字段采用客户端的 camelCase。成功返回实际数据；错误返回 `statusCode`、`message`、`timestamp`，校验失败另带字段路径 `errors`。
 
 | 方法   | 路径                    | 功能                                              |
 | ------ | ----------------------- | ------------------------------------------------- |
