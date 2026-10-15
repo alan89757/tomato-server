@@ -50,6 +50,13 @@ Stop-Service TomatoMySQL84
 
 新机器尚未安装 MySQL 时，可在管理员 PowerShell 执行 `scripts/install-mysql.ps1`。脚本下载并校验 Oracle 官方 ZIP，将程序放入 Program Files、数据放入 ProgramData，注册自动启动服务并生成随机密码；遇到已有数据或其他同名安装会停止，避免覆盖。已经完成安装的本机无需再运行。
 
+## 阿里云部署
+```powershell
+pnpm db:migrate 
+pnm build 
+pm2 restart tomato-server
+```
+
 ## 接口
 
 基础地址：`http://localhost:3000/api`。先通过 `POST /auth/login` 获取会话；所有待办与专注路由均须携带 Bearer token，未登录或会话失效返回 401。JSON 字段采用客户端的 camelCase。成功返回实际数据；错误返回 `statusCode`、`message`、`timestamp`，校验失败另带字段路径 `errors`。
