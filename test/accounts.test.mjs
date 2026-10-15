@@ -25,18 +25,23 @@ function fixture() {
       queries++;
       if (sql.startsWith('INSERT IGNORE INTO user_app_state')) {
         if (!state.has(args[0]))
-          state.set(args[0], { revision: '0', timer: null });
+          state.set(args[0], { revision: '0', timer: null, collections: null });
         return [[]];
       }
-      if (sql.startsWith('SELECT revision,timer FROM user_app_state')) {
+      if (
+        sql.startsWith('SELECT revision,timer,collections FROM user_app_state')
+      ) {
         assert.match(sql, /WHERE user_id=\? FOR UPDATE$/);
         return [[state.get(args[0])]];
       }
       if (sql.startsWith('UPDATE user_app_state')) {
         assert.match(sql, /WHERE user_id=\?$/);
-        const row = state.get(args[1]);
+        const row = state.get(args.at(-1));
         if (sql.includes('revision=?')) row.revision = args[0];
-        else row.timer = args[0];
+        else {
+          row.timer = args[0];
+          if (sql.includes('collections=?')) row.collections = args[1];
+        }
         return [[]];
       }
       const insert = /^INSERT INTO (user_\w+) \(([^)]+)\) VALUES \?$/.exec(sql);
@@ -140,6 +145,68 @@ const session = {
   durationMinutes: 25,
   completedAt: task.createdAt,
 };
+
+test('待办集与事项归属完整往返、账号隔离、旧快照兼容与删除集保留事项', async () => {
+  const f = fixture(),
+    first = f.service(1),
+    second = f.service(2);
+  const collection = {
+    id: 'exam',
+    title: '准备英语考试',
+    createdAt: task.createdAt,
+  };
+  const grouped = {
+    ...empty,
+    collections: [collection],
+    tasks: [{ ...task, collectionId: collection.id }],
+    sessions: [session],
+  };
+  await first.save(grouped, '"0"');
+  assert.deepEqual((await first.load()).value, grouped);
+  assert.deepEqual((await second.load()).value, empty);
+  await assert.rejects(
+    second.createTask({ ...task, collectionId: collection.id }),
+    /所属待办集不存在/,
+  );
+  await assert.rejects(
+    first.updateTask(task.id, { collectionId: 'missing' }),
+    /所属待办集不存在/,
+  );
+  const legacy = {
+    ...empty,
+    tasks: [{ ...task, collectionId: collection.id }],
+    sessions: [session],
+  };
+  await first.save(legacy, `"${(await first.load()).revision}"`);
+  assert.deepEqual(
+    (await first.load()).value.collections,
+    [collection],
+    'omitted collections preserve existing goals',
+  );
+  const secondGoal = { ...collection, title: '另一账号的目标' };
+  await second.save(
+    { ...grouped, collections: [secondGoal] },
+    `"${(await second.load()).revision}"`,
+  );
+  assert.deepEqual((await first.load()).value.collections, [collection]);
+  await first.updateTask(task.id, { collectionId: null });
+  assert.equal((await first.task(task.id)).value.collectionId, undefined);
+  await first.updateTask(task.id, { collectionId: collection.id });
+  await first.save(
+    {
+      ...empty,
+      collections: [],
+      tasks: [task],
+      sessions: [session],
+    },
+    `"${(await first.load()).revision}"`,
+  );
+  const removed = (await first.load()).value;
+  assert.deepEqual(removed.collections, []);
+  assert.deepEqual(removed.tasks, [task]);
+  assert.deepEqual(removed.sessions, [session]);
+  assert.deepEqual((await second.load()).value.collections, [secondGoal]);
+});
 
 test('所有待办接口按登录用户隔离，同 ID、版本、历史和计时器互不影响', async () => {
   const f = fixture(),

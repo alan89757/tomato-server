@@ -18,6 +18,41 @@ const task = {
   createdAt: '2026-10-03T10:00:00.000Z',
   completedAt: null,
 };
+test('待办集兼容旧快照，接受事项归属并拒绝重复集、空名称和未知字段', () => {
+  const collection = {
+    id: 'exam',
+    title: '准备英语考试',
+    createdAt: task.createdAt,
+  };
+  const base = { version: 1, tasks: [], sessions: [], timer: null };
+  assert.ok(snapshotSchema.safeParse(base).success);
+  const snapshot = {
+    ...base,
+    collections: [collection],
+    tasks: [{ ...task, collectionId: collection.id }],
+  };
+  assert.deepEqual(snapshotSchema.parse(snapshot), snapshot);
+  assert.ok(taskSchema.safeParse({ ...task, collectionId: null }).success);
+  assert.ok(!taskSchema.safeParse({ ...task, collectionId: 123 }).success);
+  assert.ok(
+    !snapshotSchema.safeParse({
+      ...snapshot,
+      collections: [collection, collection],
+    }).success,
+  );
+  assert.ok(
+    !snapshotSchema.safeParse({
+      ...snapshot,
+      collections: [{ ...collection, title: ' ' }],
+    }).success,
+  );
+  assert.ok(
+    !snapshotSchema.safeParse({
+      ...snapshot,
+      collections: [{ ...collection, admin: true }],
+    }).success,
+  );
+});
 test('客户端快照允许历史记录引用已删除待办，拒绝重复 ID、未知字段与非法日期', () => {
   const snapshot = {
     version: 1,

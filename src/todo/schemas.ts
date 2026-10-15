@@ -19,6 +19,7 @@ const taskFields = {
   theme: z.enum(['sky', 'city', 'mint', 'violet']).optional(),
   kind: z.enum(['pomodoro', 'goal', 'habit']).optional(),
   timingMode: z.enum(['countdown', 'countup', 'untimed']).optional(),
+  collectionId: id.nullable().optional(),
 };
 export const taskInputSchema = z.strictObject(taskFields);
 export const taskSchema = z.strictObject({
@@ -81,6 +82,16 @@ export const timerInputSchema = z.strictObject({
 export const snapshotSchema = z
   .strictObject({
     version: z.literal(1),
+    collections: z
+      .array(
+        z.strictObject({
+          id,
+          title: z.string().trim().min(1).max(80),
+          createdAt: timestamp,
+        }),
+      )
+      .max(10000)
+      .optional(),
     tasks: z.array(taskSchema).max(10000),
     sessions: z.array(sessionSchema).max(50000),
     timer: timerSchema.nullable(),
@@ -90,7 +101,12 @@ export const snapshotSchema = z
       .optional(),
   })
   .superRefine((v, ctx) => {
-    for (const key of ['tasks', 'sessions', 'abandoned'] as const) {
+    for (const key of [
+      'tasks',
+      'sessions',
+      'abandoned',
+      'collections',
+    ] as const) {
       if (
         new Set((v[key] ?? []).map((item) => item.id)).size !==
         (v[key] ?? []).length

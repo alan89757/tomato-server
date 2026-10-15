@@ -249,7 +249,10 @@ test(
       };
       const snapshot = {
         version: 1,
-        tasks: [task],
+        collections: [
+          { id: 'exam', title: '准备英语考试', createdAt: task.createdAt },
+        ],
+        tasks: [{ ...task, collectionId: 'exam' }],
         sessions: [session],
         timer,
         abandoned: [

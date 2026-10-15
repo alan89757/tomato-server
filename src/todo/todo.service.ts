@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   HttpException,
   Injectable,
@@ -26,6 +27,7 @@ import { summarize } from './stats.js';
 interface StateRow extends RowDataPacket {
   revision: string;
   timer: Timer | string | null;
+  collections: Snapshot['collections'] | string | null;
 }
 interface TaskRow extends RowDataPacket {
   id: string;
@@ -40,6 +42,7 @@ interface TaskRow extends RowDataPacket {
   theme: Task['theme'] | null;
   kind: Task['kind'] | null;
   timing_mode: Task['timingMode'] | null;
+  collection_id: string | null;
 }
 interface SessionRow extends RowDataPacket {
   id: string;
@@ -56,7 +59,7 @@ const sqlDate = (value: string | null) =>
     ? null
     : new Date(value).toISOString().slice(0, 23).replace('T', ' ');
 const taskColumns =
-  'user_id,id,title,note,category,estimated_pomodoros,duration_minutes,due_date,created_at,completed_at,theme,kind,timing_mode,sort_order';
+  'user_id,id,title,note,category,estimated_pomodoros,duration_minutes,due_date,created_at,completed_at,theme,kind,timing_mode,collection_id,sort_order';
 const sessionColumns =
   'user_id,id,task_id,task_title,category,duration_minutes,completed_at,sort_order';
 const taskValues = (t: Task, order: number) => [
@@ -72,6 +75,7 @@ const taskValues = (t: Task, order: number) => [
   t.theme ?? null,
   t.kind ?? null,
   t.timingMode ?? null,
+  t.collectionId ?? null,
   order,
 ];
 const sessionValues = (s: Session, order: number) => [
@@ -121,7 +125,7 @@ export class TodoService {
         [this.userId],
       );
       const [rows] = await connection.query<StateRow[]>(
-        'SELECT revision,timer FROM user_app_state WHERE user_id=? FOR UPDATE',
+        'SELECT revision,timer,collections FROM user_app_state WHERE user_id=? FOR UPDATE',
         [this.userId],
       );
       const state = rows[0];
@@ -169,6 +173,7 @@ export class TodoService {
       ...(r.theme === null ? {} : { theme: r.theme }),
       ...(r.kind === null ? {} : { kind: r.kind }),
       ...(r.timing_mode === null ? {} : { timingMode: r.timing_mode }),
+      ...(r.collection_id == null ? {} : { collectionId: r.collection_id }),
     }));
   }
   private async readSessions(connection: PoolConnection): Promise<Session[]> {
@@ -200,12 +205,27 @@ export class TodoService {
       ? (JSON.parse(state.timer) as Timer)
       : state.timer;
   }
+  private collectionsFrom(state: StateRow): Snapshot['collections'] {
+    return typeof state.collections === 'string'
+      ? (JSON.parse(state.collections) as Snapshot['collections'])
+      : (state.collections ?? undefined);
+  }
+  private checkMembership(
+    collectionId: Task['collectionId'],
+    collections: Snapshot['collections'],
+  ) {
+    if (collectionId && !collections?.some((c) => c.id === collectionId))
+      throw new BadRequestException('所属待办集不存在，请重新同步后重试');
+  }
   private async readSnapshot(
     connection: PoolConnection,
     state: StateRow,
   ): Promise<Snapshot> {
     return {
       version: 1,
+      ...(this.collectionsFrom(state)
+        ? { collections: this.collectionsFrom(state) }
+        : {}),
       tasks: await this.readTasks(connection),
       sessions: await this.readSessions(connection),
       timer: this.timerFrom(state),
@@ -219,7 +239,10 @@ export class TodoService {
   }
   save(snapshot: Snapshot, expected?: string) {
     return this.transact(
-      async (connection) => {
+      async (connection, state) => {
+        const collections = snapshot.collections ?? this.collectionsFrom(state);
+        for (const task of snapshot.tasks)
+          this.checkMembership(task.collectionId, collections);
         await connection.query('DELETE FROM user_tasks WHERE user_id=?', [
           this.userId,
         ]);
@@ -268,13 +291,14 @@ export class TodoService {
           );
         }
         await connection.execute(
-          'UPDATE user_app_state SET timer=? WHERE user_id=?',
+          'UPDATE user_app_state SET timer=?,collections=? WHERE user_id=?',
           [
             snapshot.timer === null ? null : JSON.stringify(snapshot.timer),
+            collections === undefined ? null : JSON.stringify(collections),
             this.userId,
           ],
         );
-        return snapshot;
+        return { ...snapshot, ...(collections ? { collections } : {}) };
       },
       true,
       expected,
@@ -293,7 +317,8 @@ export class TodoService {
   }
   createTask(input: CreateTask, expected?: string) {
     return this.transact(
-      async (connection) => {
+      async (connection, state) => {
+        this.checkMembership(input.collectionId, this.collectionsFrom(state));
         const task: Task = {
           ...input,
           id: input.id ?? randomUUID(),
@@ -323,14 +348,17 @@ export class TodoService {
     if (!task) throw new NotFoundException('待办不存在');
     const next: Task = { ...task, ...patch };
     await connection.execute(
-      'UPDATE user_tasks SET title=?,note=?,category=?,estimated_pomodoros=?,duration_minutes=?,due_date=?,created_at=?,completed_at=?,theme=?,kind=?,timing_mode=? WHERE user_id=? AND id=?',
+      'UPDATE user_tasks SET title=?,note=?,category=?,estimated_pomodoros=?,duration_minutes=?,due_date=?,created_at=?,completed_at=?,theme=?,kind=?,timing_mode=?,collection_id=? WHERE user_id=? AND id=?',
       [...taskValues(next, 0).slice(1, -1), this.userId, id],
     );
     return next;
   }
   updateTask(id: string, patch: UpdateTask, expected?: string) {
     return this.transact(
-      (connection) => this.updateTaskRow(connection, id, patch),
+      (connection, state) => {
+        this.checkMembership(patch.collectionId, this.collectionsFrom(state));
+        return this.updateTaskRow(connection, id, patch);
+      },
       true,
       expected,
     );
